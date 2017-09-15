@@ -9,23 +9,56 @@ import (
 	"strings"
 	"time"
 
-	"bosun.org/cmd/scollector/conf"
 	"bosun.org/metadata"
 	"bosun.org/opentsdb"
 	"bosun.org/util"
 )
 
-func init() {
-	registerInit(func(c *conf.Conf) {
-		if c.IfaceExpr != "" {
-			ifstatRE = regexp.MustCompile(fmt.Sprintf("(%s):(.*)", c.IfaceExpr))
-		}
+var ifstatRE *regexp.Regexp
 
-		collectors = append(collectors, &IntervalCollector{F: c_ifstat_linux})
-		collectors = append(collectors, &IntervalCollector{F: c_ipcount_linux})
-		collectors = append(collectors, &IntervalCollector{F: c_if_team_linux})
-		collectors = append(collectors, &IntervalCollector{F: c_if_bond_linux})
-	})
+func init() {
+	collectors = append(collectors, &IntervalCollector{F: c_ifstat_linux})
+	collectors = append(collectors, &IntervalCollector{F: c_ipcount_linux})
+	collectors = append(collectors, &IntervalCollector{F: c_if_team_linux})
+	collectors = append(collectors, &IntervalCollector{F: c_if_bond_linux})
+
+	// Interfaces to match with ifstat
+	ifstatInterfaces := []string{
+		// e.g. eth0
+		`eth\d+`,
+		// e.g. ens3
+		`ens\d+`,
+		// e.g. em10_5/10
+		`em\d+_\d+/\d+`,
+		// e.g. em10_5
+		`em\d+_\d+`,
+		// e.g. em0
+		`em\d+`,
+		// e.g. bond0
+		`bond\d+`,
+		// e.g. team0
+		`team\d+`,
+		// e.g. p10p5_19/2
+		`p\d+p\d+_\d+/\d+`,
+		// e.g. p10p5_19
+		`p\d+p\d+_\d+`,
+		// e.g. p19p10
+		`p\d+p\d+`,
+		// e.g. if0
+		`if\d+`,
+		// e.g. lan
+		`lan\d*`,
+		// e.g. tun0
+		`tun\d+`,
+		// e.g. br0
+		`br\d+`,
+		// e.g. docker0
+		`docker\d+`,
+		// e.g. vet09d6143 / veth1pl6143 / veth2e23fca
+		`veth?(?:[\d\w]+)`,
+	}
+	combined := strings.Join(ifstatInterfaces, "|")
+	ifstatRE = regexp.MustCompile(fmt.Sprintf(`\s*(%s):(.*)`, combined))
 }
 
 var netFields = []struct {
@@ -50,9 +83,6 @@ var netFields = []struct {
 	{"carrier.errs", metadata.Counter, metadata.Count},
 	{"compressed", metadata.Counter, metadata.Count},
 }
-
-var ifstatRE = regexp.MustCompile(`\s+(eth\d+|em\d+_\d+/\d+|em\d+_\d+|em\d+|` +
-	`bond\d+|team\d+|` + `p\d+p\d+_\d+/\d+|p\d+p\d+_\d+|p\d+p\d+):(.*)`)
 
 func c_ipcount_linux() (opentsdb.MultiDataPoint, error) {
 	var md opentsdb.MultiDataPoint
@@ -191,14 +221,10 @@ func c_if_team_linux() (opentsdb.MultiDataPoint, error) {
 				return md, err
 			}
 			var slaveCount int
-			var speed int64
 			for portName, port := range ts.TeamPorts {
 				slaveCount++
-				speed += int64(port.Link.Speed)
-				metadata.AddMeta("", opentsdb.TagSet{"iface": portName}, "master", name, true)
 				Add(&md, "linux.net.bond.slave.is_up", port.Link.Up, opentsdb.TagSet{"slave": portName, "bond": name}, metadata.Gauge, metadata.Bool, linuxNetBondSlaveIsUpDesc)
 			}
-			Add(&md, "os.net.bond.ifspeed", speed, opentsdb.TagSet{"bond": name}, metadata.Gauge, metadata.Megabit, osNetIfSpeedDesc)
 			Add(&md, "linux.net.bond.slave.count", slaveCount, opentsdb.TagSet{"bond": name}, metadata.Gauge, metadata.Count, linuxNetBondSlaveCount)
 		}
 	}
